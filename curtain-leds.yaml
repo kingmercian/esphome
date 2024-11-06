@@ -1,0 +1,420 @@
+esphome:
+  name: livingroom-led-curtain
+  comment: Living room ESP32 LED curtain controller
+
+esp32:
+  board: lolin_s2_mini
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: !secret curtain_led_ip
+    gateway: !secret wifi_gateway
+    subnet: 255.255.255.0
+  ap:
+    ssid: "Curtain LEDs Fallback Hotspot"
+    password: !secret ap_password
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+api:
+
+#logger:
+
+web_server:
+  port: 80
+
+globals:
+  - id: max_brightness
+    type: float
+    restore_value: no
+    initial_value: '1.0'
+  - id: zero_delay
+    type: int
+    restore_value: no
+    initial_value: '0'
+# slow fade
+  - id: slow_fade_time
+    type: int
+    restore_value: no
+    initial_value: '2000'
+  - id: slow_fade_hold_time
+    type: int
+    restore_value: no
+    initial_value: '4000'
+# quick fade
+  - id: fast_fade_time
+    type: int
+    restore_value: no
+    initial_value: '2500'
+# alternating flash
+  - id: alt_flash_delay_time
+    type: int
+    restore_value: no
+    initial_value: '100'
+# twinkle
+  - id: twinkle_fade_on_time
+    type: int
+    restore_value: no
+    initial_value: '500'
+  - id: twinkle_fade_off_time
+    type: int
+    restore_value: no
+    initial_value: '250'
+
+# output config
+output:
+  - platform: ledc
+    pin: GPIO37
+    id: pnp1
+  - platform: ledc
+    pin: GPIO35
+    id: npn1
+    inverted: true
+  - platform: ledc
+    pin: GPIO39
+    id: pnp2
+  - platform: ledc
+    pin: GPIO33
+    id: npn2
+    inverted: true
+
+# light config
+light:
+  - platform: monochromatic
+    output: pnp1
+    name: "PNP1"
+    id: led_pnp1
+    internal: true
+  - platform: monochromatic
+    output: npn1
+    name: "NPN1"
+    id: led_npn1
+    internal: true
+  - platform: monochromatic
+    output: pnp2
+    name: "PNP2"
+    id: led_pnp2
+    internal: true
+  - platform: monochromatic
+    output: npn2
+    name: "NPN2"
+    id: led_npn2
+    internal: true
+
+# dropdown select
+select:
+  - platform: template
+    name: LED Pattern
+    id: led_pattern
+    options:
+      - "Slow Fade"
+      - "Fast Fade"
+      - "Alternating Flash"
+      - "Solid"
+      - "Twinkle"
+    initial_option: "Slow Fade"
+    optimistic: true
+    set_action:
+      - script.execute: manage_led_patterns
+    on_value:
+      - script.execute: manage_led_patterns
+
+# LED toggle
+switch:
+  - platform: template
+    name: "Toggle LEDs"
+    id: led_toggle
+    optimistic: true
+    on_turn_on:
+      - script.execute: manage_led_patterns
+    on_turn_off:
+      - script.execute: set_default
+
+# script all the things
+script:
+  # stops scripts and turns off outputs
+  - id: set_default
+    mode: single
+    then:
+      - script.stop: slow_fade_pattern
+      - script.stop: fast_fade_pattern
+      - script.stop: alternating_flash_pattern
+      - script.stop: solid_pattern
+      - script.stop: twinkle_pattern
+      - light.turn_off: led_pnp1
+      - light.turn_off: led_npn1
+      - light.turn_off: led_pnp2
+      - light.turn_off: led_npn2
+
+  # led patterns switch, used by our dropdown
+  - id: manage_led_patterns
+    mode: single
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(led_pattern).state == "Slow Fade";'
+              - switch.is_on: led_toggle
+          then:
+            - script.execute: set_default
+            - script.execute: slow_fade_pattern
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(led_pattern).state == "Fast Fade";'
+              - switch.is_on: led_toggle
+          then:
+            - script.execute: set_default
+            - script.execute: fast_fade_pattern
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(led_pattern).state == "Alternating Flash";'
+              - switch.is_on: led_toggle
+          then:
+            - script.execute: set_default
+            - script.execute: alternating_flash_pattern
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(led_pattern).state == "Solid";'
+              - switch.is_on: led_toggle
+          then:
+            - script.execute: set_default
+            - script.execute: solid_pattern
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(led_pattern).state == "Twinkle";'
+              - switch.is_on: led_toggle
+          then:
+            - script.execute: set_default
+            - script.execute: twinkle_pattern
+
+  # slow fade pattern
+  - id: slow_fade_pattern
+    mode: single
+    then:
+      - while:
+          condition:
+            switch.is_on: led_toggle
+          then:
+            # fade in first LED half
+            - light.turn_on:
+                id: led_pnp1
+                transition_length: !lambda "return id(zero_delay);"
+                brightness: !lambda "return id(max_brightness);"
+            - light.turn_on:
+                id: led_npn1
+                transition_length: !lambda "return id(slow_fade_time);"
+                brightness: !lambda "return id(max_brightness);"
+
+            # wait for slow_fade_time + slow_fade_hold_time
+            - delay: !lambda "return id(slow_fade_time) + id(slow_fade_hold_time);"
+
+            #  fade out first LED half
+            - light.turn_off:
+                id: led_pnp1
+                transition_length: !lambda "return id(slow_fade_time);"
+            - delay: !lambda "return id(slow_fade_time);"
+            - light.turn_off:
+                id: led_npn1
+                transition_length: !lambda "return id(zero_delay);"
+
+            # fade in second LED half
+            - light.turn_on:
+                id: led_pnp2
+                transition_length: !lambda "return id(zero_delay);"
+                brightness: !lambda "return id(max_brightness);"
+            - light.turn_on:
+                id: led_npn2
+                transition_length: !lambda "return id(slow_fade_time);"
+                brightness: !lambda "return id(max_brightness);"
+
+            # wait for slow_fade_time + slow_fade_hold_time
+            - delay: !lambda "return id(slow_fade_time) + id(slow_fade_hold_time);"
+
+            # fade out second LED half
+            - light.turn_off:
+                id: led_pnp2
+                transition_length: !lambda "return id(slow_fade_time);"
+            - delay: !lambda "return id(slow_fade_time);"
+            - light.turn_off:
+                id: led_npn2
+                transition_length: !lambda "return id(zero_delay);"
+
+  # fast fade pattern
+  - id: fast_fade_pattern
+    mode: single
+    then:
+      - while:
+          condition:
+            switch.is_on: led_toggle
+          then:
+            # fade in first LED half
+            - light.turn_on:
+                id: led_pnp1
+                transition_length: !lambda "return id(zero_delay);"
+                brightness: !lambda "return id(max_brightness);"
+            - light.turn_on:
+                id: led_npn1
+                transition_length: !lambda "return id(fast_fade_time);"
+                brightness: !lambda "return id(max_brightness);"
+
+            # wait for fast_fade_time 
+            - delay: !lambda "return id(fast_fade_time);"
+
+            # fade out first LED half
+            - light.turn_off:
+                id: led_pnp1
+                transition_length: !lambda "return id(fast_fade_time);"
+            - delay: !lambda "return id(fast_fade_time);"
+            - light.turn_off:
+                id: led_npn1
+                transition_length: !lambda "return id(zero_delay);"
+
+            # fade in second LED half
+            - light.turn_on:
+                id: led_pnp2
+                transition_length: !lambda "return id(zero_delay);"
+                brightness: !lambda "return id(max_brightness);"
+            - light.turn_on:
+                id: led_npn2
+                transition_length: !lambda "return id(fast_fade_time);"
+                brightness: !lambda "return id(max_brightness);"
+
+            # Wait for fast_fade_time
+            - delay: !lambda "return id(fast_fade_time);"
+
+            # fade out second LED half
+            - light.turn_off:
+                id: led_pnp2
+                transition_length: !lambda "return id(fast_fade_time);"
+            - delay: !lambda "return id(fast_fade_time);"
+            - light.turn_off:
+                id: led_npn2
+                transition_length: !lambda "return id(zero_delay);"
+
+  # alt flash pattern
+  - id: alternating_flash_pattern
+    mode: single
+    then:
+      - while:
+          condition:
+            switch.is_on: led_toggle
+          then:
+            # flash first LED half * 4
+            - repeat:
+                count: 4
+                then:
+                  - light.turn_on:
+                      id: led_pnp1
+                      transition_length: !lambda "return id(zero_delay);"
+                      brightness: !lambda "return id(max_brightness);"
+                  - light.turn_on:
+                      id: led_npn1
+                      transition_length: !lambda "return id(zero_delay);"
+                      brightness: !lambda "return id(max_brightness);"
+                  - delay: !lambda "return id(alt_flash_delay_time);"
+                  - light.turn_off:
+                      id: led_pnp1
+                      transition_length: !lambda "return id(zero_delay);"
+                  - light.turn_off:
+                      id: led_npn1
+                      transition_length: !lambda "return id(zero_delay);"
+                  - delay: !lambda "return id(alt_flash_delay_time);"
+
+            # flash second LED half * 4
+            - repeat:
+                count: 4
+                then:
+                  - light.turn_on:
+                      id: led_pnp2
+                      transition_length: !lambda "return id(zero_delay);"
+                      brightness: !lambda "return id(max_brightness);"
+                  - light.turn_on:
+                      id: led_npn2
+                      transition_length: !lambda "return id(zero_delay);"
+                      brightness: !lambda "return id(max_brightness);"
+                  - delay: !lambda "return id(alt_flash_delay_time);"
+                  - light.turn_off:
+                      id: led_pnp2
+                      transition_length: !lambda "return id(zero_delay);"
+                  - light.turn_off:
+                      id: led_npn2
+                      transition_length: !lambda "return id(zero_delay);"
+                  - delay: !lambda "return id(alt_flash_delay_time);"
+
+# solid pattern
+  - id: solid_pattern
+    mode: single
+    then:
+      - while:
+          condition:
+            switch.is_on: led_toggle
+          then:
+            - output.turn_on: pnp1
+            - output.turn_on: npn1
+            - delay: 5ms
+            - output.turn_off: pnp1
+            - output.turn_off: npn1
+
+            - output.turn_on: pnp2
+            - output.turn_on: npn2
+            - output.turn_off: pnp2
+            - output.turn_off: npn2
+
+# twinkle pattern
+  - id: twinkle_pattern
+    mode: single
+    then:
+      - while:
+          condition:
+            switch.is_on: led_toggle
+          then:
+            # turn on first LED half
+            - light.turn_on:
+                id: led_pnp1
+                transition_length: !lambda "return id(zero_delay);"
+                brightness: !lambda "return id(max_brightness);"
+            - light.turn_on:
+                id: led_npn1
+                transition_length: !lambda "return id(twinkle_fade_on_time);"
+                brightness: !lambda "return id(max_brightness);"
+            - delay: !lambda "return id(twinkle_fade_on_time);"
+
+            # turn off first LED half
+            - light.turn_off:
+                id: led_pnp1
+                transition_length: !lambda "return id(twinkle_fade_off_time);"
+            - delay: !lambda "return id(twinkle_fade_off_time);"
+            - light.turn_off:
+                id: led_npn1
+                transition_length: !lambda "return id(zero_delay);"
+
+            # turn on second LED half
+            - light.turn_on:
+                id: led_pnp2
+                transition_length: !lambda "return id(zero_delay);"
+                brightness: !lambda "return id(max_brightness);"
+            - light.turn_on:
+                id: led_npn2
+                transition_length: !lambda "return id(twinkle_fade_on_time);"
+                brightness: !lambda "return id(max_brightness);"
+            - delay: !lambda "return id(twinkle_fade_on_time);"
+
+            # turn off second LED half
+            - light.turn_off:
+                id: led_pnp2
+                transition_length: !lambda "return id(twinkle_fade_off_time);"
+            - delay: !lambda "return id(twinkle_fade_off_time);"
+            - light.turn_off:
+                id: led_npn2
+                transition_length: !lambda "return id(zero_delay);"
+
