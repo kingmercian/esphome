@@ -1,3 +1,5 @@
+---
+
 esphome:
   name: livingroom-led-curtain
   comment: Living room ESP32 LED curtain controller
